@@ -10,3 +10,5 @@
   - Uモード(User Mode): 普通のアプリが動くモード
   - Sモード(Supervisor Mode): OSカーネルが動くモード
   - Mモード(Machine Mode): ハードウェアを直接触る、最も権限が強いモード。OpenSBIはここ
+  - `ecall`(Environment Call)命令で一つ下のレイヤーへ処理を依頼する
+    - CPUが1つ下のモード(=1つ上の権限)に切り替わり、終わった後もとに戻る
