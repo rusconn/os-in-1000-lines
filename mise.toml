@@ -1,0 +1,2 @@
+[env]
+_.path = ["{{ system_brew_prefix }}/opt/llvm/bin"]
