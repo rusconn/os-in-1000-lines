@@ -352,32 +352,6 @@ struct process *create_process(const void *image, size_t image_size) {
     return proc;
 }
 
-void delay(void) {
-    for (int i = 0; i < 30000000; i++)
-        __asm__ __volatile__("nop");
-}
-
-struct process *proc_a;
-struct process *proc_b;
-
-void proc_a_entry(void) {
-    printf("starting process A\n");
-    while (1) {
-        putchar('A');
-        yield();
-        delay();
-    }
-}
-
-void proc_b_entry(void) {
-    printf("starting process B\n");
-    while (1) {
-        putchar('B');
-        yield();
-        delay();
-    }
-}
-
 void kernel_main(void) {
     memset(__bss, 0, (size_t)__bss_end - (size_t)__bss);
 
