@@ -27,6 +27,11 @@ struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4, lo
 
 void putchar(char ch) { sbi_call(ch, 0, 0, 0, 0, 0, 0, 1 /* Console Putchar */); }
 
+long getchar(void) {
+    struct sbiret ret = sbi_call(0, 0, 0, 0, 0, 0, 0, 2);
+    return ret.error;
+}
+
 __attribute__((section(".text.boot"))) __attribute__((naked)) void boot(void) {
     __asm__ __volatile__("mv sp, %[stack_top]\n"
                          "j kernel_main\n"
@@ -117,10 +122,94 @@ __attribute__((naked)) __attribute__((aligned(4))) void kernel_entry(void) {
         "sret\n");
 }
 
+__attribute__((naked)) void switch_context(uint32_t *prev_sp, uint32_t *next_sp) {
+    __asm__ __volatile__(
+        // 実行中プロセスのスタックへレジスタを保存
+        "addi sp, sp, -13 * 4\n"
+        "sw ra,  0  * 4(sp)\n"
+        "sw s0,  1  * 4(sp)\n"
+        "sw s1,  2  * 4(sp)\n"
+        "sw s2,  3  * 4(sp)\n"
+        "sw s3,  4  * 4(sp)\n"
+        "sw s4,  5  * 4(sp)\n"
+        "sw s5,  6  * 4(sp)\n"
+        "sw s6,  7  * 4(sp)\n"
+        "sw s7,  8  * 4(sp)\n"
+        "sw s8,  9  * 4(sp)\n"
+        "sw s9,  10 * 4(sp)\n"
+        "sw s10, 11 * 4(sp)\n"
+        "sw s11, 12 * 4(sp)\n"
+
+        // スタックポインタの切り替え
+        "sw sp, (a0)\n"
+        "lw sp, (a1)\n"
+
+        // 次のプロセスのスタックからレジスタを復元
+        "lw ra,  0  * 4(sp)\n"
+        "lw s0,  1  * 4(sp)\n"
+        "lw s1,  2  * 4(sp)\n"
+        "lw s2,  3  * 4(sp)\n"
+        "lw s3,  4  * 4(sp)\n"
+        "lw s4,  5  * 4(sp)\n"
+        "lw s5,  6  * 4(sp)\n"
+        "lw s6,  7  * 4(sp)\n"
+        "lw s7,  8  * 4(sp)\n"
+        "lw s8,  9  * 4(sp)\n"
+        "lw s9,  10 * 4(sp)\n"
+        "lw s10, 11 * 4(sp)\n"
+        "lw s11, 12 * 4(sp)\n"
+        "addi sp, sp, 13 * 4\n"
+        "ret\n");
+}
+
+struct process procs[PROCS_MAX];
+
+struct process *current_proc;
+struct process *idle_proc;
+
+void yield(void) {
+    // 実行可能なプロセスを探す
+    struct process *next = idle_proc;
+    for (int i = 0; i < PROCS_MAX; i++) {
+        struct process *proc = &procs[(current_proc->pid + i) % PROCS_MAX];
+        if (proc->state == PROC_RUNNABLE && proc->pid > 0) {
+            next = proc;
+            break;
+        }
+    }
+
+    // 現在実行中のプロセス以外に、実行可能なプロセスがない。戻って処理を続行する
+    if (next == current_proc)
+        return;
+
+    struct process *prev = current_proc;
+    current_proc = next;
+
+    __asm__ __volatile__("sfence.vma\n"
+                         "csrw satp, %[satp]\n"
+                         "sfence.vma\n"
+                         "csrw sscratch, %[sscratch]\n"
+                         :
+                         : [satp] "r"(SATP_SV32 | ((uint32_t)next->page_table / PAGE_SIZE)),
+                           [sscratch] "r"((uint32_t)&next->stack[sizeof(next->stack)]));
+
+    switch_context(&prev->sp, &next->sp);
+}
+
 void handle_syscall(struct trap_frame *f) {
     switch (f->a3) {
     case SYS_PUTCHAR:
         putchar(f->a0);
+        break;
+    case SYS_GETCHAR:
+        while (1) {
+            long ch = getchar();
+            if (ch >= 0) {
+                f->a0 = ch;
+                break;
+            }
+            yield();
+        }
         break;
     default:
         PANIC("unexpected syscall a3=%x\n", f->a3);
@@ -184,48 +273,6 @@ void map_page(uint32_t *table1, uint32_t vaddr, paddr_t paddr, uint32_t flags) {
     uint32_t vpn0 = (vaddr >> 12) & 0x3ff; // 仮想アドレスから真ん中10bit(=vpn0)を抽出している
     uint32_t *table0 = (uint32_t *)((table1[vpn1] >> 10) * PAGE_SIZE);
     table0[vpn0] = ((paddr / PAGE_SIZE) << 10) | flags | PAGE_V;
-}
-
-struct process procs[PROCS_MAX];
-
-__attribute__((naked)) void switch_context(uint32_t *prev_sp, uint32_t *next_sp) {
-    __asm__ __volatile__(
-        // 実行中プロセスのスタックへレジスタを保存
-        "addi sp, sp, -13 * 4\n"
-        "sw ra,  0  * 4(sp)\n"
-        "sw s0,  1  * 4(sp)\n"
-        "sw s1,  2  * 4(sp)\n"
-        "sw s2,  3  * 4(sp)\n"
-        "sw s3,  4  * 4(sp)\n"
-        "sw s4,  5  * 4(sp)\n"
-        "sw s5,  6  * 4(sp)\n"
-        "sw s6,  7  * 4(sp)\n"
-        "sw s7,  8  * 4(sp)\n"
-        "sw s8,  9  * 4(sp)\n"
-        "sw s9,  10 * 4(sp)\n"
-        "sw s10, 11 * 4(sp)\n"
-        "sw s11, 12 * 4(sp)\n"
-
-        // スタックポインタの切り替え
-        "sw sp, (a0)\n"
-        "lw sp, (a1)\n"
-
-        // 次のプロセスのスタックからレジスタを復元
-        "lw ra,  0  * 4(sp)\n"
-        "lw s0,  1  * 4(sp)\n"
-        "lw s1,  2  * 4(sp)\n"
-        "lw s2,  3  * 4(sp)\n"
-        "lw s3,  4  * 4(sp)\n"
-        "lw s4,  5  * 4(sp)\n"
-        "lw s5,  6  * 4(sp)\n"
-        "lw s6,  7  * 4(sp)\n"
-        "lw s7,  8  * 4(sp)\n"
-        "lw s8,  9  * 4(sp)\n"
-        "lw s9,  10 * 4(sp)\n"
-        "lw s10, 11 * 4(sp)\n"
-        "lw s11, 12 * 4(sp)\n"
-        "addi sp, sp, 13 * 4\n"
-        "ret\n");
 }
 
 extern char __kernel_base[];
@@ -303,38 +350,6 @@ struct process *create_process(const void *image, size_t image_size) {
 void delay(void) {
     for (int i = 0; i < 30000000; i++)
         __asm__ __volatile__("nop");
-}
-
-struct process *current_proc;
-struct process *idle_proc;
-
-void yield(void) {
-    // 実行可能なプロセスを探す
-    struct process *next = idle_proc;
-    for (int i = 0; i < PROCS_MAX; i++) {
-        struct process *proc = &procs[(current_proc->pid + i) % PROCS_MAX];
-        if (proc->state == PROC_RUNNABLE && proc->pid > 0) {
-            next = proc;
-            break;
-        }
-    }
-
-    // 現在実行中のプロセス以外に、実行可能なプロセスがない。戻って処理を続行する
-    if (next == current_proc)
-        return;
-
-    struct process *prev = current_proc;
-    current_proc = next;
-
-    __asm__ __volatile__("sfence.vma\n"
-                         "csrw satp, %[satp]\n"
-                         "sfence.vma\n"
-                         "csrw sscratch, %[sscratch]\n"
-                         :
-                         : [satp] "r"(SATP_SV32 | ((uint32_t)next->page_table / PAGE_SIZE)),
-                           [sscratch] "r"((uint32_t)&next->stack[sizeof(next->stack)]));
-
-    switch_context(&prev->sp, &next->sp);
 }
 
 struct process *proc_a;
