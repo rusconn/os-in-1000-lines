@@ -13,6 +13,9 @@ CFLAGS="-std=c11 -O2 -g3 -Wall -Wextra --target=riscv32-unknown-elf -fuse-ld=lld
 # objcopyコマンド(パスが通っていること)
 OBJCOPY=llvm-objcopy
 
+# カーネルのソースファイル
+KERNEL_SRCS="sbi.c trap.c proc.c vm.c virtio.c fs.c kernel_main.c common.c"
+
 # シェルをビルド
 $CC $CFLAGS -Wl,-Tuser.ld -Wl,-Map=shell.map -o shell.elf shell.c user.c common.c
 $OBJCOPY --set-section-flags .bss=alloc,contents -O binary shell.elf shell.bin
@@ -20,7 +23,7 @@ $OBJCOPY -Ibinary -Oelf32-littleriscv shell.bin shell.bin.o
 
 # カーネルをビルド
 $CC $CFLAGS -Wl,-Tkernel.ld -Wl,-Map=kernel.map -o kernel.elf \
-  kernel.c common.c shell.bin.o
+  $KERNEL_SRCS shell.bin.o
 
 (cd disk && tar cf ../disk.tar --format=ustar *.txt)
 
